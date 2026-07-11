@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import RefreshToken, User
+from app.rate_limit import limiter
 from app.schemas.auth import LogoutRequest, RefreshRequest, TokenPair, UserLogin, UserRead, UserRegister
 from app.security import create_access_token, create_refresh_token, decode_token, hash_password, verify_password
 
@@ -38,7 +39,8 @@ def _get_valid_refresh_token(db: Session, token: str) -> RefreshToken:
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-def register(payload: UserRegister, db: Session = Depends(get_db)) -> User:
+@limiter.limit("5/minute")
+def register(request: Request, payload: UserRegister, db: Session = Depends(get_db)) -> User:
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing is not None:
         raise HTTPException(
@@ -54,7 +56,8 @@ def register(payload: UserRegister, db: Session = Depends(get_db)) -> User:
 
 
 @router.post("/login", response_model=TokenPair)
-def login(payload: UserLogin, db: Session = Depends(get_db)) -> TokenPair:
+@limiter.limit("5/minute")
+def login(request: Request, payload: UserLogin, db: Session = Depends(get_db)) -> TokenPair:
     user = db.query(User).filter(User.email == payload.email).first()
     if user is None or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(
