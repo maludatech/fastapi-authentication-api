@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import RefreshToken, User
-from app.schemas.auth import RefreshRequest, TokenPair, UserLogin, UserRead, UserRegister
+from app.schemas.auth import LogoutRequest, RefreshRequest, TokenPair, UserLogin, UserRead, UserRegister
 from app.security import create_access_token, create_refresh_token, decode_token, hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -88,3 +88,20 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenPair
     db.commit()
 
     return TokenPair(access_token=access_token, refresh_token=new_refresh_token)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(
+    payload: LogoutRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    stored = _get_valid_refresh_token(db, payload.refresh_token)
+    if stored.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
+
+    stored.revoked = True
+    db.commit()
