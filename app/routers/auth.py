@@ -108,3 +108,15 @@ def logout(
 
     stored.revoked = True
     db.commit()
+
+
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
+def logout_all(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == current_user.id,
+        RefreshToken.revoked.is_(False),
+    ).update({"revoked": True})
+    db.commit()
