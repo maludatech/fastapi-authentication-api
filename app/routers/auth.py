@@ -1,13 +1,40 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import RefreshToken, User
-from app.schemas.auth import TokenPair, UserLogin, UserRead, UserRegister
-from app.security import create_access_token, create_refresh_token, hash_password, verify_password
+from app.schemas.auth import RefreshRequest, TokenPair, UserLogin, UserRead, UserRegister
+from app.security import create_access_token, create_refresh_token, decode_token, hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _get_valid_refresh_token(db: Session, token: str) -> RefreshToken:
+    invalid = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired refresh token",
+    )
+
+    try:
+        payload = decode_token(token)
+    except ValueError:
+        raise invalid
+
+    if payload.get("type") != "refresh":
+        raise invalid
+
+    stored = db.query(RefreshToken).filter(RefreshToken.jti == payload.get("jti")).first()
+    if (
+        stored is None
+        or stored.revoked
+        or stored.expires_at < datetime.now(timezone.utc)
+    ):
+        raise invalid
+
+    return stored
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -47,3 +74,17 @@ def login(payload: UserLogin, db: Session = Depends(get_db)) -> TokenPair:
 @router.get("/me", response_model=UserRead)
 def me(current_user: User = Depends(get_current_user)) -> User:
     return current_user
+
+
+@router.post("/refresh", response_model=TokenPair)
+def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenPair:
+    stored = _get_valid_refresh_token(db, payload.refresh_token)
+    stored.revoked = True
+
+    access_token = create_access_token(subject=str(stored.user_id))
+    new_refresh_token, jti, expires_at = create_refresh_token(subject=str(stored.user_id))
+
+    db.add(RefreshToken(user_id=stored.user_id, jti=jti, expires_at=expires_at))
+    db.commit()
+
+    return TokenPair(access_token=access_token, refresh_token=new_refresh_token)
